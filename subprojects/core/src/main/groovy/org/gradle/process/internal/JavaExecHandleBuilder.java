@@ -15,6 +15,11 @@
  */
 package org.gradle.process.internal;
 
+import org.apache.commons.lang.RandomStringUtils;
+import org.apache.tools.ant.taskdefs.Jar;
+import org.apache.tools.ant.taskdefs.Manifest;
+import org.apache.tools.ant.taskdefs.ManifestException;
+import org.apache.tools.ant.taskdefs.condition.Os;
 import org.gradle.api.file.FileCollection;
 import org.gradle.api.internal.file.FileResolver;
 import org.gradle.api.internal.file.collections.DefaultConfigurableFileCollection;
@@ -24,8 +29,10 @@ import org.gradle.util.CollectionUtils;
 import org.gradle.util.GUtil;
 
 import java.io.File;
+import java.net.MalformedURLException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
@@ -49,7 +56,40 @@ public class JavaExecHandleBuilder extends AbstractExecHandleBuilder implements 
         allArgs.addAll(javaOptions.getAllJvmArgs());
         if (!classpath.isEmpty()) {
             allArgs.add("-cp");
-            allArgs.add(CollectionUtils.join(File.pathSeparator, classpath.getFiles()));
+
+            String classpathString = CollectionUtils.join(File.pathSeparator, classpath.getFiles());
+
+            if (Os.isFamily(Os.FAMILY_WINDOWS) && classpathString.length() > 10000) {
+                try {
+                    Jar pathingJar = new Jar();
+                    Manifest manifest = new Manifest();
+
+                    StringBuilder manifestClasspath = new StringBuilder();
+
+                    Iterator<File> iter = classpath.getFiles().iterator();
+                    for (File entry = iter.next(); iter.hasNext(); entry = iter.next()) {
+                        String classpathEntry = entry.toURI().toURL().toString().replaceFirst("file:/+", "/");
+                        manifestClasspath.append(classpathEntry);
+                        if (iter.hasNext()) {
+                            manifestClasspath.append(' ');
+                        }
+                    }
+                    manifest.addConfiguredAttribute(new Manifest.Attribute("Class-Path", manifestClasspath.toString()));
+
+                    File file = new File("build/javaExec/pathing_" + System.currentTimeMillis() + "_" + RandomStringUtils.randomAlphanumeric(4) + ".jar");
+                    pathingJar.addConfiguredManifest(manifest);
+                    pathingJar.setDestFile(file);
+                    pathingJar.execute();
+
+                    classpathString = file.getAbsolutePath();
+                } catch (ManifestException e) {
+                    throw new IllegalStateException("Pathing Jar Manifest not creatable", e);
+                } catch (MalformedURLException e) {
+                    throw new IllegalStateException("Pathing Jar Manifest not creatable", e);
+                }
+            }
+
+            allArgs.add(classpathString);
         }
         return allArgs;
     }
